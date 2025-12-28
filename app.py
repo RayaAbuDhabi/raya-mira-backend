@@ -1,8 +1,7 @@
 """
-Raya & Mira - Backend API (FIXED)
-- Fixed Smart Mode voice routing bug
-- Proper voice selection based on detected language
-- Abu Dhabi Airport Assistant
+Raya & Mira - Backend API
+FastAPI server for Render.com deployment
+Handles LLM processing and TTS generation
 """
 
 from fastapi import FastAPI, HTTPException
@@ -15,16 +14,18 @@ import edge_tts
 from groq import Groq
 import base64
 
-app = FastAPI(title="Raya & Mira API", version="1.1.0")
+app = FastAPI(title="Raya & Mira API", version="1.0.0")
 
+# CORS middleware for Vercel frontend
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["*"],  # In production, specify your Vercel domain
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+# Character configurations
 CHARACTERS = {
     'raya': {
         'name': 'Raya',
@@ -46,6 +47,7 @@ You're direct and clear in your communication, and assertive when needed. Keep r
     }
 }
 
+# Initialize Groq client
 groq_client = None
 try:
     api_key = os.environ.get('GROQ_API_KEY')
@@ -54,6 +56,7 @@ try:
 except Exception as e:
     print(f"Warning: Groq client initialization failed: {e}")
 
+# Request/Response models
 class ChatRequest(BaseModel):
     message: str
     character: str = 'raya'
@@ -123,9 +126,8 @@ async def root():
     return {
         "status": "online",
         "service": "Raya & Mira API",
-        "version": "1.1.0",
-        "characters": list(CHARACTERS.keys()),
-        "fixes": ["Smart Mode voice routing", "Language detection improved"]
+        "version": "1.0.0",
+        "characters": list(CHARACTERS.keys())
     }
 
 @app.get("/characters")
@@ -135,22 +137,19 @@ async def get_characters():
         char_id: {
             'name': config['name'],
             'emoji': config['emoji'],
-            'language': config['language'],
-            'voice': config['voice']
+            'language': config['language']
         }
         for char_id, config in CHARACTERS.items()
     }
 
 @app.post("/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest):
-    """Process chat message and return response with audio - FIXED SMART MODE"""
+    """Process chat message and return response with audio"""
     
     # Determine character based on mode
     if request.mode == 'smart':
-        # Detect language from user message
         language = detect_language(request.message)
         character = get_character_for_language(language)
-        print(f"Smart Mode: Detected {language} → Using {character}")
     else:
         character = request.character
     
@@ -167,14 +166,8 @@ async def chat(request: ChatRequest):
         request.history or []
     )
     
-    # CRITICAL FIX: Use the character's correct voice for TTS
-    # This was the bug - Smart Mode was using wrong voice!
-    correct_voice = char_config['voice']
-    
-    print(f"Using voice: {correct_voice} for character: {character}")
-    
-    # Generate audio with CORRECT voice
-    audio_bytes = await generate_speech(text_response, correct_voice)
+    # Generate audio
+    audio_bytes = await generate_speech(text_response, char_config['voice'])
     audio_base64 = base64.b64encode(audio_bytes).decode('utf-8') if audio_bytes else None
     
     return ChatResponse(
@@ -183,7 +176,7 @@ async def chat(request: ChatRequest):
         emoji=char_config['emoji'],
         text_response=text_response,
         audio_base64=audio_base64,
-        voice=correct_voice  # Return which voice was actually used
+        voice=char_config['voice']
     )
 
 @app.get("/health")
@@ -192,9 +185,7 @@ async def health():
     return {
         "status": "healthy",
         "groq_configured": groq_client is not None,
-        "characters_available": len(CHARACTERS),
-        "version": "1.1.0",
-        "bug_fixes": ["Smart Mode voice routing fixed"]
+        "characters_available": len(CHARACTERS)
     }
 
 if __name__ == "__main__":
