@@ -1,501 +1,202 @@
-import { useState, useRef, useEffect } from 'react';
-import Head from 'next/head';
+"""
+Raya & Mira - Backend API (FIXED)
+- Fixed Smart Mode voice routing bug
+- Proper voice selection based on detected language
+- Abu Dhabi Airport Assistant
+"""
 
-export default function Home() {
-  const [mode, setMode] = useState('smart');
-  const [character, setCharacter] = useState('raya');
-  const [messages, setMessages] = useState([]);
-  const [input, setInput] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [apiUrl, setApiUrl] = useState('');
-  const [isListening, setIsListening] = useState(false);
-  const [speechSupported, setSpeechSupported] = useState(false);
-  const messagesEndRef = useRef(null);
-  const recognitionRef = useRef(null);
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+import os
+import asyncio
+from typing import Optional, List, Dict
+import edge_tts
+from groq import Groq
+import base64
 
-  useEffect(() => {
-    // Set API URL
-    setApiUrl(process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000');
-    
-    // Check for speech recognition support
-    if (typeof window !== 'undefined') {
-      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-      if (SpeechRecognition) {
-        setSpeechSupported(true);
-        const recognition = new SpeechRecognition();
-        recognition.continuous = false;
-        recognition.interimResults = false;
-        recognition.lang = mode === 'dual' && character === 'raya' ? 'ar-AE' : 'en-US';
-        
-        recognition.onresult = (event) => {
-          const transcript = event.results[0][0].transcript;
-          setInput(transcript);
-          setIsListening(false);
-        };
-        
-        recognition.onerror = (event) => {
-          console.error('Speech recognition error:', event.error);
-          setIsListening(false);
-        };
-        
-        recognition.onend = () => {
-          setIsListening(false);
-        };
-        
-        recognitionRef.current = recognition;
-      }
+app = FastAPI(title="Raya & Mira API", version="1.1.0")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+CHARACTERS = {
+    'raya': {
+        'name': 'Raya',
+        'voice': 'ar-AE-FatimaNeural',
+        'language': 'Arabic',
+        'emoji': '🇦🇪',
+        'system_prompt': """You are Raya, a warm and welcoming Emirati airport assistant at Abu Dhabi International Airport. 
+You specialize in helping Arabic-speaking travelers. You're knowledgeable about local culture, traditions, and the airport.
+You're friendly, patient, and take pride in showing Emirati hospitality. Keep responses concise and helpful."""
+    },
+    'mira': {
+        'name': 'Mira',
+        'voice': 'en-GB-SoniaNeural',
+        'language': 'English',
+        'emoji': '🌍',
+        'system_prompt': """You are Mira, an international airport assistant at Abu Dhabi International Airport.
+You're warm, outspoken, and exceptionally helpful. You specialize in assisting English-speaking international travelers.
+You're direct and clear in your communication, and assertive when needed. Keep responses concise and actionable."""
     }
-  }, [mode, character]);
-
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  };
-
-  useEffect(() => {
-    scrollToBottom();
-  }, [messages]);
-
-  const startListening = () => {
-    if (recognitionRef.current && !isListening) {
-      // Update language based on mode/character
-      if (mode === 'dual' && character === 'raya') {
-        recognitionRef.current.lang = 'ar-AE';
-      } else {
-        recognitionRef.current.lang = 'en-US';
-      }
-      
-      setIsListening(true);
-      recognitionRef.current.start();
-    }
-  };
-
-  const stopListening = () => {
-    if (recognitionRef.current && isListening) {
-      recognitionRef.current.stop();
-      setIsListening(false);
-    }
-  };
-
-  const playAudio = (audioBase64) => {
-    const audio = new Audio(`data:audio/mp3;base64,${audioBase64}`);
-    audio.play().catch(err => console.error('Audio playback failed:', err));
-  };
-
-  const sendMessage = async () => {
-    if (!input.trim() || loading) return;
-
-    const userMessage = input.trim();
-    setInput('');
-    setLoading(true);
-
-    const newMessages = [...messages, { role: 'user', content: userMessage }];
-    setMessages(newMessages);
-
-    try {
-      const response = await fetch(`${apiUrl}/chat`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          message: userMessage,
-          character: character,
-          mode: mode,
-          history: newMessages.map(m => ({ role: m.role, content: m.content }))
-        })
-      });
-
-      if (!response.ok) throw new Error('API request failed');
-
-      const data = await response.json();
-
-      setMessages(prev => [...prev, {
-        role: 'assistant',
-        content: data.text_response,
-        character: data.character_name,
-        emoji: data.emoji,
-        audioBase64: data.audio_base64
-      }]);
-
-      if (data.audio_base64) {
-        playAudio(data.audio_base64);
-      }
-
-    } catch (error) {
-      console.error('Error:', error);
-      setMessages(prev => [...prev, {
-        role: 'assistant',
-        content: `Error: ${error.message}. Please check if the API server is running.`,
-        character: 'System',
-        emoji: '⚠️'
-      }]);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleKeyPress = (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      sendMessage();
-    }
-  };
-
-  return (
-    <>
-      <Head>
-        <title>Raya & Mira - Airport Assistants</title>
-        <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
-        <meta name="description" content="AI-powered bilingual airport assistants" />
-      </Head>
-
-      <div style={styles.container}>
-        {/* Header */}
-        <div style={styles.header}>
-          <h1 style={styles.title}>🎭 Raya & Mira</h1>
-          <p style={styles.subtitle}>Your Bilingual Airport Assistants</p>
-        </div>
-
-        {/* Mode Selection */}
-        <div style={styles.modeContainer}>
-          <button
-            onClick={() => setMode('smart')}
-            style={{...styles.modeButton, ...(mode === 'smart' ? styles.modeButtonActive : {})}}
-          >
-            🤖 Smart Mode
-            <span style={styles.modeDesc}>Auto-detects language</span>
-          </button>
-          <button
-            onClick={() => setMode('dual')}
-            style={{...styles.modeButton, ...(mode === 'dual' ? styles.modeButtonActive : {})}}
-          >
-            👥 Dual Mode
-            <span style={styles.modeDesc}>Choose assistant</span>
-          </button>
-        </div>
-
-        {/* Character Selection (Dual Mode) */}
-        {mode === 'dual' && (
-          <div style={styles.characterContainer}>
-            <button
-              onClick={() => setCharacter('raya')}
-              style={{...styles.characterButton, ...(character === 'raya' ? styles.characterActive : {})}}
-            >
-              <span style={styles.charEmoji}>🇦🇪</span>
-              <div>
-                <div style={styles.charName}>Raya</div>
-                <div style={styles.charDesc}>Emirati • Arabic</div>
-              </div>
-            </button>
-            <button
-              onClick={() => setCharacter('mira')}
-              style={{...styles.characterButton, ...(character === 'mira' ? styles.characterActive : {})}}
-            >
-              <span style={styles.charEmoji}>🌍</span>
-              <div>
-                <div style={styles.charName}>Mira</div>
-                <div style={styles.charDesc}>International • English</div>
-              </div>
-            </button>
-          </div>
-        )}
-
-        {/* Chat Messages */}
-        <div style={styles.messagesContainer}>
-          {messages.length === 0 && (
-            <div style={styles.emptyState}>
-              <p style={styles.emptyText}>
-                {mode === 'smart' 
-                  ? '💬 Type or speak in Arabic or English!' 
-                  : `💬 Chat with ${character === 'raya' ? 'Raya 🇦🇪' : 'Mira 🌍'}`}
-              </p>
-              {speechSupported && (
-                <p style={styles.emptySubtext}>
-                  🎤 Tap microphone to speak
-                </p>
-              )}
-            </div>
-          )}
-
-          {messages.map((msg, idx) => (
-            <div
-              key={idx}
-              style={{
-                ...styles.message,
-                ...(msg.role === 'user' ? styles.userMessage : styles.assistantMessage)
-              }}
-            >
-              {msg.role === 'assistant' && (
-                <div style={styles.messageMeta}>
-                  <span style={styles.messageEmoji}>{msg.emoji}</span>
-                  <span style={styles.messageName}>{msg.character}</span>
-                </div>
-              )}
-              <div style={styles.messageContent}>{msg.content}</div>
-              {msg.audioBase64 && (
-                <button
-                  onClick={() => playAudio(msg.audioBase64)}
-                  style={styles.playButton}
-                >
-                  🔊 Play Audio
-                </button>
-              )}
-            </div>
-          ))}
-          <div ref={messagesEndRef} />
-        </div>
-
-        {/* Input Area */}
-        <div style={styles.inputContainer}>
-          {speechSupported && (
-            <button
-              onClick={isListening ? stopListening : startListening}
-              style={{
-                ...styles.micButton,
-                ...(isListening ? styles.micButtonActive : {})
-              }}
-              disabled={loading}
-            >
-              {isListening ? '🔴' : '🎤'}
-            </button>
-          )}
-          <textarea
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyPress={handleKeyPress}
-            placeholder={isListening ? "Listening..." : "Type or speak your message..."}
-            style={styles.input}
-            rows={2}
-            disabled={loading || isListening}
-          />
-          <button
-            onClick={sendMessage}
-            disabled={loading || !input.trim() || isListening}
-            style={{
-              ...styles.sendButton,
-              ...(loading || !input.trim() || isListening ? styles.sendButtonDisabled : {})
-            }}
-          >
-            {loading ? '⏳' : '📤'}
-          </button>
-        </div>
-
-        {/* Footer */}
-        <div style={styles.footer}>
-          {speechSupported ? '🎤 Voice enabled • ' : ''}Powered by Groq • Edge TTS • Built by Mr. Data
-        </div>
-      </div>
-    </>
-  );
 }
 
-const styles = {
-  container: {
-    display: 'flex',
-    flexDirection: 'column',
-    height: '100vh',
-    maxWidth: '800px',
-    margin: '0 auto',
-    backgroundColor: '#f5f5f5',
-    fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif'
-  },
-  header: {
-    background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-    color: 'white',
-    padding: '20px',
-    textAlign: 'center',
-    boxShadow: '0 2px 10px rgba(0,0,0,0.1)'
-  },
-  title: {
-    margin: '0 0 5px 0',
-    fontSize: '24px',
-    fontWeight: 'bold'
-  },
-  subtitle: {
-    margin: 0,
-    fontSize: '14px',
-    opacity: 0.9
-  },
-  modeContainer: {
-    display: 'flex',
-    gap: '10px',
-    padding: '15px',
-    backgroundColor: 'white',
-    borderBottom: '1px solid #e0e0e0'
-  },
-  modeButton: {
-    flex: 1,
-    padding: '12px',
-    border: '2px solid #e0e0e0',
-    borderRadius: '10px',
-    backgroundColor: 'white',
-    cursor: 'pointer',
-    fontSize: '14px',
-    fontWeight: '600',
-    display: 'flex',
-    flexDirection: 'column',
-    gap: '4px',
-    transition: 'all 0.2s'
-  },
-  modeButtonActive: {
-    borderColor: '#667eea',
-    backgroundColor: '#f0f4ff'
-  },
-  modeDesc: {
-    fontSize: '11px',
-    fontWeight: 'normal',
-    color: '#666'
-  },
-  characterContainer: {
-    display: 'flex',
-    gap: '10px',
-    padding: '15px',
-    backgroundColor: 'white',
-    borderBottom: '1px solid #e0e0e0'
-  },
-  characterButton: {
-    flex: 1,
-    padding: '15px',
-    border: '2px solid #e0e0e0',
-    borderRadius: '10px',
-    backgroundColor: 'white',
-    cursor: 'pointer',
-    display: 'flex',
-    alignItems: 'center',
-    gap: '12px',
-    transition: 'all 0.2s'
-  },
-  characterActive: {
-    borderColor: '#667eea',
-    backgroundColor: '#f0f4ff'
-  },
-  charEmoji: {
-    fontSize: '32px'
-  },
-  charName: {
-    fontSize: '16px',
-    fontWeight: '600',
-    marginBottom: '2px'
-  },
-  charDesc: {
-    fontSize: '12px',
-    color: '#666'
-  },
-  messagesContainer: {
-    flex: 1,
-    overflowY: 'auto',
-    padding: '20px',
-    display: 'flex',
-    flexDirection: 'column',
-    gap: '15px'
-  },
-  emptyState: {
-    display: 'flex',
-    flexDirection: 'column',
-    alignItems: 'center',
-    justifyContent: 'center',
-    height: '100%',
-    color: '#999'
-  },
-  emptyText: {
-    fontSize: '16px',
-    marginBottom: '5px'
-  },
-  emptySubtext: {
-    fontSize: '14px',
-    color: '#bbb'
-  },
-  message: {
-    maxWidth: '80%',
-    padding: '12px 16px',
-    borderRadius: '18px',
-    wordWrap: 'break-word'
-  },
-  userMessage: {
-    alignSelf: 'flex-end',
-    backgroundColor: '#667eea',
-    color: 'white'
-  },
-  assistantMessage: {
-    alignSelf: 'flex-start',
-    backgroundColor: 'white',
-    boxShadow: '0 1px 2px rgba(0,0,0,0.1)'
-  },
-  messageMeta: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '8px',
-    marginBottom: '6px',
-    fontSize: '13px',
-    fontWeight: '600',
-    color: '#667eea'
-  },
-  messageEmoji: {
-    fontSize: '16px'
-  },
-  messageName: {},
-  messageContent: {
-    lineHeight: '1.5'
-  },
-  playButton: {
-    marginTop: '8px',
-    padding: '6px 12px',
-    border: 'none',
-    borderRadius: '12px',
-    backgroundColor: '#f0f4ff',
-    color: '#667eea',
-    fontSize: '12px',
-    fontWeight: '600',
-    cursor: 'pointer'
-  },
-  inputContainer: {
-    display: 'flex',
-    gap: '10px',
-    padding: '15px',
-    backgroundColor: 'white',
-    borderTop: '1px solid #e0e0e0'
-  },
-  micButton: {
-    padding: '12px 16px',
-    border: '2px solid #e0e0e0',
-    borderRadius: '12px',
-    backgroundColor: 'white',
-    fontSize: '20px',
-    cursor: 'pointer',
-    transition: 'all 0.2s'
-  },
-  micButtonActive: {
-    backgroundColor: '#ff4444',
-    borderColor: '#ff4444',
-    animation: 'pulse 1s infinite'
-  },
-  input: {
-    flex: 1,
-    padding: '12px',
-    border: '2px solid #e0e0e0',
-    borderRadius: '12px',
-    fontSize: '15px',
-    resize: 'none',
-    fontFamily: 'inherit'
-  },
-  sendButton: {
-    padding: '12px 20px',
-    border: 'none',
-    borderRadius: '12px',
-    backgroundColor: '#667eea',
-    color: 'white',
-    fontSize: '20px',
-    cursor: 'pointer',
-    transition: 'all 0.2s'
-  },
-  sendButtonDisabled: {
-    backgroundColor: '#ccc',
-    cursor: 'not-allowed'
-  },
-  footer: {
-    padding: '10px',
-    textAlign: 'center',
-    fontSize: '11px',
-    color: '#999',
-    backgroundColor: 'white',
-    borderTop: '1px solid #e0e0e0'
-  }
-};
+groq_client = None
+try:
+    api_key = os.environ.get('GROQ_API_KEY')
+    if api_key:
+        groq_client = Groq(api_key=api_key)
+except Exception as e:
+    print(f"Warning: Groq client initialization failed: {e}")
+
+class ChatRequest(BaseModel):
+    message: str
+    character: str = 'raya'
+    mode: str = 'smart'
+    history: Optional[List[Dict]] = []
+
+class ChatResponse(BaseModel):
+    character: str
+    character_name: str
+    emoji: str
+    text_response: str
+    audio_base64: Optional[str] = None
+    voice: str
+
+def detect_language(text: str) -> str:
+    """Detect if text is primarily Arabic or English"""
+    arabic_chars = sum(1 for c in text if '\u0600' <= c <= '\u06FF')
+    total_chars = len([c for c in text if c.isalpha()])
+    
+    if total_chars == 0:
+        return 'english'
+    
+    return 'arabic' if arabic_chars / total_chars > 0.3 else 'english'
+
+def get_character_for_language(language: str) -> str:
+    """Get appropriate character based on detected language"""
+    return 'raya' if language == 'arabic' else 'mira'
+
+async def generate_speech(text: str, voice: str) -> bytes:
+    """Generate speech audio using Edge TTS"""
+    try:
+        communicate = edge_tts.Communicate(text, voice)
+        audio_data = b""
+        async for chunk in communicate.stream():
+            if chunk["type"] == "audio":
+                audio_data += chunk["data"]
+        return audio_data
+    except Exception as e:
+        print(f"TTS Error: {e}")
+        return None
+
+def get_llm_response(message: str, system_prompt: str, history: List[Dict]) -> str:
+    """Get response from Groq LLM"""
+    if not groq_client:
+        return "Error: LLM service not configured. Please set GROQ_API_KEY."
+    
+    try:
+        messages = [{"role": "system", "content": system_prompt}]
+        messages.extend(history)
+        messages.append({"role": "user", "content": message})
+        
+        response = groq_client.chat.completions.create(
+            model="llama-3.1-8b-instant",
+            messages=messages,
+            temperature=0.7,
+            max_tokens=500
+        )
+        
+        return response.choices[0].message.content
+    except Exception as e:
+        print(f"LLM Error: {e}")
+        return f"I'm having trouble processing that right now. Error: {str(e)}"
+
+@app.get("/")
+async def root():
+    """Health check endpoint"""
+    return {
+        "status": "online",
+        "service": "Raya & Mira API",
+        "version": "1.1.0",
+        "characters": list(CHARACTERS.keys()),
+        "fixes": ["Smart Mode voice routing", "Language detection improved"]
+    }
+
+@app.get("/characters")
+async def get_characters():
+    """Get available characters"""
+    return {
+        char_id: {
+            'name': config['name'],
+            'emoji': config['emoji'],
+            'language': config['language'],
+            'voice': config['voice']
+        }
+        for char_id, config in CHARACTERS.items()
+    }
+
+@app.post("/chat", response_model=ChatResponse)
+async def chat(request: ChatRequest):
+    """Process chat message and return response with audio - FIXED SMART MODE"""
+    
+    # Determine character based on mode
+    if request.mode == 'smart':
+        # Detect language from user message
+        language = detect_language(request.message)
+        character = get_character_for_language(language)
+        print(f"Smart Mode: Detected {language} → Using {character}")
+    else:
+        character = request.character
+    
+    # Validate character
+    if character not in CHARACTERS:
+        raise HTTPException(status_code=400, detail="Invalid character")
+    
+    char_config = CHARACTERS[character]
+    
+    # Get LLM response
+    text_response = get_llm_response(
+        request.message,
+        char_config['system_prompt'],
+        request.history or []
+    )
+    
+    # CRITICAL FIX: Use the character's correct voice for TTS
+    # This was the bug - Smart Mode was using wrong voice!
+    correct_voice = char_config['voice']
+    
+    print(f"Using voice: {correct_voice} for character: {character}")
+    
+    # Generate audio with CORRECT voice
+    audio_bytes = await generate_speech(text_response, correct_voice)
+    audio_base64 = base64.b64encode(audio_bytes).decode('utf-8') if audio_bytes else None
+    
+    return ChatResponse(
+        character=character,
+        character_name=char_config['name'],
+        emoji=char_config['emoji'],
+        text_response=text_response,
+        audio_base64=audio_base64,
+        voice=correct_voice  # Return which voice was actually used
+    )
+
+@app.get("/health")
+async def health():
+    """Detailed health check"""
+    return {
+        "status": "healthy",
+        "groq_configured": groq_client is not None,
+        "characters_available": len(CHARACTERS),
+        "version": "1.1.0",
+        "bug_fixes": ["Smart Mode voice routing fixed"]
+    }
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
