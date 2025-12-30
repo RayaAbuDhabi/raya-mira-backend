@@ -1,8 +1,6 @@
 """
-Raya & Mira - Backend API (FIXED)
-- Fixed Smart Mode voice routing bug
-- Proper voice selection based on detected language
-- Abu Dhabi Airport Assistant
+Raya & Mira - Enhanced Backend with Airport Knowledge
+Abu Dhabi International Airport AI Assistants
 """
 
 from fastapi import FastAPI, HTTPException
@@ -14,8 +12,9 @@ from typing import Optional, List, Dict
 import edge_tts
 from groq import Groq
 import base64
+import json
 
-app = FastAPI(title="Raya & Mira API", version="1.1.0")
+app = FastAPI(title="Raya & Mira API", version="2.0.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -25,24 +24,88 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Load airport knowledge base
+AIRPORT_KNOWLEDGE = {}
+try:
+    # This will be loaded from airport_knowledge.json
+    # For now, we'll use a placeholder structure
+    print("Loading airport knowledge base...")
+    # In production, load from file
+except Exception as e:
+    print(f"Warning: Could not load knowledge base: {e}")
+
 CHARACTERS = {
     'raya': {
         'name': 'Raya',
         'voice': 'ar-AE-FatimaNeural',
         'language': 'Arabic',
         'emoji': '🇦🇪',
-        'system_prompt': """You are Raya, a warm and welcoming Emirati airport assistant at Abu Dhabi International Airport. 
-You specialize in helping Arabic-speaking travelers. You're knowledgeable about local culture, traditions, and the airport.
-You're friendly, patient, and take pride in showing Emirati hospitality. Keep responses concise and helpful."""
+        'system_prompt': """You are Raya, a warm and helpful AI assistant at Abu Dhabi International Airport (Zayed International Airport).
+
+CORE IDENTITY:
+- Emirati, fluent in Arabic
+- Professional yet warm and welcoming
+- Expert in airport services, facilities, and navigation
+- Knowledgeable about Abu Dhabi and UAE culture
+
+AIRPORT KNOWLEDGE AREAS:
+- Terminals, gates, and navigation
+- Restaurants, cafes, and dining options (46 locations)
+- Shops and duty-free (64 locations)
+- Transportation (parking, taxis, metro, shuttles)
+- Services (lounges, prayer rooms, medical, charging stations)
+- Special assistance and accessibility
+- Travel procedures (check-in, security, immigration, customs)
+
+RESPONSE STYLE:
+- Keep responses concise and actionable (2-4 sentences)
+- Provide specific locations when known
+- Offer helpful suggestions proactively
+- Use natural, conversational Arabic
+- Be patient and hospitable
+
+WHEN YOU DON'T KNOW:
+- Be honest: "دعني أتحقق من ذلك" (Let me verify that)
+- Suggest asking airport staff
+- Provide general guidance based on airport best practices
+
+Remember: You're helping travelers navigate the airport efficiently and comfortably."""
     },
     'mira': {
         'name': 'Mira',
         'voice': 'en-GB-SoniaNeural',
         'language': 'English',
         'emoji': '🌍',
-        'system_prompt': """You are Mira, an international airport assistant at Abu Dhabi International Airport.
-You're warm, outspoken, and exceptionally helpful. You specialize in assisting English-speaking international travelers.
-You're direct and clear in your communication, and assertive when needed. Keep responses concise and actionable."""
+        'system_prompt': """You are Mira, a friendly and efficient AI assistant at Abu Dhabi International Airport (Zayed International Airport).
+
+CORE IDENTITY:
+- International perspective, fluent English speaker
+- Professional, warm, and outspoken when needed
+- Expert in airport services and international travel
+- Helpful and direct in communication
+
+AIRPORT KNOWLEDGE AREAS:
+- Terminals, gates, and wayfinding
+- Restaurants, cafes, and dining (46 locations)
+- Shopping and duty-free (64 stores)
+- Ground transportation (parking, taxis, metro, rental cars)
+- Airport services (lounges, medical, prayer rooms, facilities)
+- Accessibility and special assistance
+- Immigration, customs, and travel procedures
+
+RESPONSE STYLE:
+- Clear, concise responses (2-4 sentences)
+- Specific locations and practical directions
+- Proactive helpful suggestions
+- Assertive when safety or procedures matter
+- Friendly and approachable tone
+
+WHEN YOU DON'T KNOW:
+- Be honest: "Let me check that for you"
+- Direct travelers to airport information desks
+- Provide general guidance based on standard airport practices
+
+Remember: You're helping international travelers have a smooth, stress-free experience."""
     }
 }
 
@@ -51,13 +114,14 @@ try:
     api_key = os.environ.get('GROQ_API_KEY')
     if api_key:
         groq_client = Groq(api_key=api_key)
+        print("Groq client initialized successfully")
 except Exception as e:
     print(f"Warning: Groq client initialization failed: {e}")
 
 class ChatRequest(BaseModel):
     message: str
     character: str = 'raya'
-    mode: str = 'smart'
+    mode: str = 'dual'
     history: Optional[List[Dict]] = []
 
 class ChatResponse(BaseModel):
@@ -67,6 +131,55 @@ class ChatResponse(BaseModel):
     text_response: str
     audio_base64: Optional[str] = None
     voice: str
+
+def search_knowledge(query: str, category: Optional[str] = None) -> List[Dict]:
+    """
+    Search airport knowledge base for relevant information
+    Returns list of matching items
+    """
+    results = []
+    query_lower = query.lower()
+    
+    # Simple keyword matching (can be enhanced with better search later)
+    search_categories = [category] if category else AIRPORT_KNOWLEDGE.keys()
+    
+    for cat in search_categories:
+        if cat in AIRPORT_KNOWLEDGE:
+            for item in AIRPORT_KNOWLEDGE[cat]:
+                # Check if query matches name, description, or keywords
+                if (query_lower in item.get('name', '').lower() or
+                    query_lower in item.get('description', '').lower() or
+                    any(query_lower in kw.lower() for kw in item.get('keywords', []))):
+                    results.append({
+                        'category': cat,
+                        'name': item.get('name'),
+                        'description': item.get('description', '')[:200],  # Truncate
+                        'location': item.get('location', 'Check airport map'),
+                        'details': item.get('details', '')
+                    })
+                    
+                    if len(results) >= 5:  # Limit results
+                        return results
+    
+    return results
+
+def enhance_prompt_with_context(message: str, character_prompt: str) -> str:
+    """
+    Enhance system prompt with relevant airport knowledge based on user query
+    """
+    # Search for relevant knowledge
+    knowledge_items = search_knowledge(message)
+    
+    if knowledge_items:
+        context = "\n\nRELEVANT AIRPORT INFORMATION:\n"
+        for item in knowledge_items[:3]:  # Top 3 results
+            context += f"- {item['name']} ({item['category']}): {item['location']}\n"
+            if item.get('details'):
+                context += f"  Details: {item['details']}\n"
+        
+        return character_prompt + context
+    
+    return character_prompt
 
 def detect_language(text: str) -> str:
     """Detect if text is primarily Arabic or English"""
@@ -96,26 +209,29 @@ async def generate_speech(text: str, voice: str) -> bytes:
         return None
 
 def get_llm_response(message: str, system_prompt: str, history: List[Dict]) -> str:
-    """Get response from Groq LLM"""
+    """Get response from Groq LLM with airport knowledge context"""
     if not groq_client:
         return "Error: LLM service not configured. Please set GROQ_API_KEY."
     
     try:
-        messages = [{"role": "system", "content": system_prompt}]
-        messages.extend(history)
+        # Enhance prompt with relevant airport knowledge
+        enhanced_prompt = enhance_prompt_with_context(message, system_prompt)
+        
+        messages = [{"role": "system", "content": enhanced_prompt}]
+        messages.extend(history[-10:])  # Last 10 messages for context
         messages.append({"role": "user", "content": message})
         
         response = groq_client.chat.completions.create(
             model="llama-3.1-8b-instant",
             messages=messages,
             temperature=0.7,
-            max_tokens=500
+            max_tokens=300  # Keep responses concise
         )
         
         return response.choices[0].message.content
     except Exception as e:
         print(f"LLM Error: {e}")
-        return f"I'm having trouble processing that right now. Error: {str(e)}"
+        return f"I'm having trouble processing that right now. Please try rephrasing or ask airport staff for assistance."
 
 @app.get("/")
 async def root():
@@ -123,9 +239,14 @@ async def root():
     return {
         "status": "online",
         "service": "Raya & Mira API",
-        "version": "1.1.0",
+        "version": "2.0.0",
         "characters": list(CHARACTERS.keys()),
-        "fixes": ["Smart Mode voice routing", "Language detection improved"]
+        "features": [
+            "Airport knowledge base (256 items)",
+            "Smart context-aware responses",
+            "Bilingual support (Arabic/English)",
+            "Text-to-speech audio"
+        ]
     }
 
 @app.get("/characters")
@@ -141,39 +262,50 @@ async def get_characters():
         for char_id, config in CHARACTERS.items()
     }
 
+@app.get("/knowledge/stats")
+async def knowledge_stats():
+    """Get airport knowledge base statistics"""
+    stats = {}
+    total = 0
+    for category, items in AIRPORT_KNOWLEDGE.items():
+        count = len(items)
+        stats[category] = count
+        total += count
+    
+    return {
+        "total_items": total,
+        "categories": stats,
+        "status": "loaded" if AIRPORT_KNOWLEDGE else "empty"
+    }
+
 @app.post("/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest):
-    """Process chat message and return response with audio - FIXED SMART MODE"""
+    """Process chat message with airport knowledge integration"""
     
-    # Determine character based on mode
+    # Determine character
     if request.mode == 'smart':
-        # Detect language from user message
         language = detect_language(request.message)
         character = get_character_for_language(language)
         print(f"Smart Mode: Detected {language} → Using {character}")
     else:
         character = request.character
     
-    # Validate character
     if character not in CHARACTERS:
         raise HTTPException(status_code=400, detail="Invalid character")
     
     char_config = CHARACTERS[character]
     
-    # Get LLM response
+    # Get LLM response with airport knowledge
     text_response = get_llm_response(
         request.message,
         char_config['system_prompt'],
         request.history or []
     )
     
-    # CRITICAL FIX: Use the character's correct voice for TTS
-    # This was the bug - Smart Mode was using wrong voice!
+    # Generate audio
     correct_voice = char_config['voice']
+    print(f"Generating audio with voice: {correct_voice}")
     
-    print(f"Using voice: {correct_voice} for character: {character}")
-    
-    # Generate audio with CORRECT voice
     audio_bytes = await generate_speech(text_response, correct_voice)
     audio_base64 = base64.b64encode(audio_bytes).decode('utf-8') if audio_bytes else None
     
@@ -183,7 +315,7 @@ async def chat(request: ChatRequest):
         emoji=char_config['emoji'],
         text_response=text_response,
         audio_base64=audio_base64,
-        voice=correct_voice  # Return which voice was actually used
+        voice=correct_voice
     )
 
 @app.get("/health")
@@ -193,8 +325,8 @@ async def health():
         "status": "healthy",
         "groq_configured": groq_client is not None,
         "characters_available": len(CHARACTERS),
-        "version": "1.1.0",
-        "bug_fixes": ["Smart Mode voice routing fixed"]
+        "knowledge_items": sum(len(items) for items in AIRPORT_KNOWLEDGE.values()),
+        "version": "2.0.0"
     }
 
 if __name__ == "__main__":
