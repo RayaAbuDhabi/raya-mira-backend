@@ -27,12 +27,30 @@ app.add_middleware(
 # Load airport knowledge base
 AIRPORT_KNOWLEDGE = {}
 try:
-    # This will be loaded from airport_knowledge.json
-    # For now, we'll use a placeholder structure
-    print("Loading airport knowledge base...")
-    # In production, load from file
+    import os
+    # Try multiple possible paths
+    possible_paths = [
+        'airport_knowledge_compact.json',
+        './airport_knowledge_compact.json',
+        '/opt/render/project/src/airport_knowledge_compact.json'
+    ]
+    
+    for path in possible_paths:
+        if os.path.exists(path):
+            print(f"Found knowledge base at: {path}")
+            with open(path, 'r', encoding='utf-8') as f:
+                AIRPORT_KNOWLEDGE = json.load(f)
+                total_items = sum(len(items) for items in AIRPORT_KNOWLEDGE.values())
+                print(f"✅ Loaded {total_items} airport knowledge items")
+                break
+    
+    if not AIRPORT_KNOWLEDGE:
+        print("❌ ERROR: Could not find airport_knowledge_compact.json!")
+        print(f"Current directory: {os.getcwd()}")
+        print(f"Files available: {os.listdir('.')}")
+        
 except Exception as e:
-    print(f"Warning: Could not load knowledge base: {e}")
+    print(f"❌ ERROR loading knowledge base: {e}")
 
 CHARACTERS = {
     'raya': {
