@@ -27,10 +27,10 @@ app.add_middleware(
 # Load airport knowledge base
 AIRPORT_KNOWLEDGE = {}
 try:
-    with open('airport_knowledge_compact.json', 'r', encoding='utf-8') as f:
-        AIRPORT_KNOWLEDGE = json.load(f)
-        total_items = sum(len(items) for items in AIRPORT_KNOWLEDGE.values())
-        print(f"✅ Loaded {total_items} airport knowledge items from 8 categories")
+    # This will be loaded from airport_knowledge.json
+    # For now, we'll use a placeholder structure
+    print("Loading airport knowledge base...")
+    # In production, load from file
 except Exception as e:
     print(f"Warning: Could not load knowledge base: {e}")
 
