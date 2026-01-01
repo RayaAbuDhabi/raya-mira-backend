@@ -273,12 +273,12 @@ async def chat(request: ChatRequest):
             input_language=input_language
         )
         
-        # Generate TTS audio - select voice based on character AND language
+        # Generate TTS audio - voices are CHARACTER-SPECIFIC, not language-specific
         if request.character == 'raya':
-            # Raya: Use voice matching response language
-            voice = 'ar-AE-FatimaNeural' if input_language == 'arabic' else 'en-GB-SoniaNeural'
+            # Raya: ALWAYS Arabic voice (even when responding in English)
+            voice = 'ar-AE-FatimaNeural'
         else:
-            # Mera: Always English voice
+            # Mera: ALWAYS English voice
             voice = 'en-GB-SoniaNeural'
         
         print(f"🔊 Generating audio: {request.character} | {input_language} → {voice}")
